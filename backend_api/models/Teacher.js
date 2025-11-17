@@ -41,6 +41,10 @@ const Teacher = sequelize.define(
       type: DataTypes.STRING,
       allowNull: false,
     },
+    profilePic: {
+      type: DataTypes.BLOB("long"),
+      allowNull: true,
+    },
   },
   { timestamps: true }
 );

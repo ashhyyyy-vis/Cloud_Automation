@@ -78,7 +78,7 @@ Class.belongsToMany(Session, {
 // Sync models to the database
 (async () => {
   try {
-    await sequelize.sync({ alter: true });
+    await sequelize.sync();
     console.log("All models synced successfully");
   } catch (error) {
     console.error("Model sync failed:", error);

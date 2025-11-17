@@ -7,12 +7,14 @@ const {
   SessionClass,
   CourseStats,
   Class,
+  Student,
 } = require("../models");
 const { Op } = require("sequelize");
 const redis = require("../config/redis");
 const jwt = require("jsonwebtoken");
 const { v4: uuidv4 } = require("uuid");
 const router = express.Router();
+const QRCode = require("qrcode");
 
 // Run cleanup before each session
 router.use(async (req, res, next) => {
@@ -84,7 +86,7 @@ router.post("/start", auth(["teacher"]), async (req, res) => {
         endTime,
       }),
       "EX",
-      duration * 60 // expire after duration
+      duration * 60 + 20 // expire after duration + time for end session message
     );
 
     res.json({ success: true, session });
@@ -119,8 +121,10 @@ router.get("/:sessionId/qr", auth(["teacher"]), async (req, res) => {
       520 // 500 seconds + 20 extra seconds in redis
     ); // Store nonce with 65 seconds expiry
 
+    const qrImage = await QRCode.toDataURL(qrToken);
     res.json({
       success: true,
+      qrImage,
       qrToken,
       validFrom: iat * 1000,
       validTo: exp * 1000,
@@ -136,10 +140,174 @@ router.get("/:sessionId/live", auth(["teacher"]), async (req, res) => {
   try {
     const { sessionId } = req.params;
     const studentIds = await redis.smembers(`liveAttendance:${sessionId}`);
-    res.json({ success: true, presentStudents: studentIds });
+
+    const students = await Student.findAll({
+      where: { id: studentIds },
+      attributes: ["id", "firstName", "lastName", "MIS"],
+    });
+
+    res.json({
+      success: true,
+      presentStudents: students,
+    });
   } catch (error) {
     console.error("Live attendance Error: ", error);
-    res.status(500).json({ success: false, message: "Live attendance Error" });
+    res.status(500).json({
+      success: false,
+      message: "Live attendance Error",
+    });
+  }
+});
+
+// GET all students marked or not
+router.get("/:sessionId/students", auth(["teacher"]), async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+
+    // Fetch session
+    const session = await Session.findByPk(sessionId, {
+      include: [{ model: Class, through: SessionClass }],
+    });
+
+    if (!session)
+      return res
+        .status(404)
+        .json({ success: false, message: "Session not found" });
+
+    // Extract all classIds for this session
+    const classIds = session.Classes.map((cls) => cls.id);
+
+    if (!classIds.length) return res.json({ success: true, students: [] });
+
+    // Fetch ALL students in these classes  ⬅ FIXED HERE
+    const students = await Student.findAll({
+      where: { classId: { [Op.in]: classIds } },
+      attributes: [
+        "id",
+        "firstName",
+        "lastName",
+        "MIS",
+        "department",
+        "branch",
+        "classId",
+      ],
+      include: [{ model: Class, as: "class" }],
+    });
+
+    // Fetch attendance data
+    const attendance = await Attendance.findAll({
+      where: { sessionId },
+    });
+
+    const presentMap = {};
+    attendance.forEach((a) => (presentMap[a.studentId] = true));
+
+    // Build response
+    const list = students.map((s) => ({
+      id: s.id,
+      firstName: s.firstName,
+      lastName: s.lastName,
+      MIS: s.MIS,
+      department: s.department,
+      branch: s.branch,
+      class: {
+        id: s.class?.id,
+        name: s.class?.name,
+        code: s.class?.code,
+      },
+      present: !!presentMap[s.id], // True if in attendance table
+    }));
+
+    return res.json({ success: true, students: list });
+  } catch (error) {
+    console.error("GET SESSION STUDENTS ERROR:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error fetching session students",
+    });
+  }
+});
+
+// POST bulk mark students present
+router.post("/:sessionId/mark", auth(["teacher"]), async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const { studentIds } = req.body;
+
+    if (!Array.isArray(studentIds) || studentIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "studentIds must be a non-empty array",
+      });
+    }
+
+    // Check session exists
+    const session = await Session.findByPk(sessionId);
+    if (!session) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Session not found" });
+    }
+
+    // Fetch allowed classes of the session
+    const allowedClasses = await SessionClass.findAll({
+      where: { sessionId },
+      attributes: ["classId"],
+    });
+
+    const allowedClassIds = allowedClasses.map((c) => c.classId);
+
+    // Fetch students to validate class membership
+    const students = await Student.findAll({
+      where: { id: studentIds },
+    });
+
+    if (students.length === 0)
+      return res.status(404).json({
+        success: false,
+        message: "No valid students found",
+      });
+
+    let marked = [];
+    let rejected = [];
+
+    for (const student of students) {
+      if (!allowedClassIds.includes(student.classId)) {
+        rejected.push({
+          studentId: student.id,
+          reason: "Student not in session class",
+        });
+        continue;
+      }
+
+      // Mark attendance if not already present
+      await Attendance.findOrCreate({
+        where: { sessionId, studentId: student.id },
+        defaults: { markedAt: new Date() },
+      });
+
+      // Add to redis live attendance
+      await redis.sadd(`liveAttendance:${sessionId}`, student.id);
+
+      marked.push(student.id);
+    }
+
+    return res.json({
+      success: true,
+      message: "Bulk attendance processed",
+      summary: {
+        markedCount: marked.length,
+        rejectedCount: rejected.length,
+        marked,
+        rejected,
+      },
+    });
+  } catch (error) {
+    console.error("BULK MARK STUDENTS ERROR:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error marking students present",
+    });
   }
 });
 

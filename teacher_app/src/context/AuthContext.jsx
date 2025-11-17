@@ -1,31 +1,50 @@
-import { createContext, useContext, useState } from "react";
+import { createContext, useState, useEffect } from "react";
 
-const AuthContext = createContext(null);
+export const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
-  const [user, setUser] = useState(
-    JSON.parse(localStorage.getItem("user")) || null
-  );
+  const [user, setUser] = useState(null);
+  const [token, setToken] = useState(null);
+  const [offset, setOffset] = useState(0);
 
-  const login = (token, userData) => {
-    localStorage.setItem("token", token);
-    localStorage.setItem("user", JSON.stringify(userData));
+  // Restore auth from localStorage on refresh
+  useEffect(() => {
+    const saved = localStorage.getItem("auth");
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      setUser(parsed.user);
+      setToken(parsed.token);
+      setOffset(parsed.offset);
+    }
+  }, []);
+
+  const login = (userData, tokenData, serverTimeData) => {
+    const clientNow = Date.now();
+    const offset = serverTimeData - clientNow;
     setUser(userData);
+    setToken(tokenData);
+    setOffset(offset);
+
+    localStorage.setItem(
+      "auth",
+      JSON.stringify({
+        user: userData,
+        token: tokenData,
+        offset,
+      })
+    );
   };
 
   const logout = () => {
-    localStorage.removeItem("token");
-    localStorage.removeItem("user");
+    localStorage.removeItem("auth");
     setUser(null);
+    setToken(null);
+    setOffset(0);
   };
 
   return (
-    <AuthContext.Provider value={{ user, login, logout }}>
+    <AuthContext.Provider value={{ user, token, offset, login, logout }}>
       {children}
     </AuthContext.Provider>
   );
-}
-
-export function useAuth() {
-  return useContext(AuthContext);
 }

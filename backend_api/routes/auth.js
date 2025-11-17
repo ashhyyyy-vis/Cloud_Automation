@@ -42,6 +42,10 @@ router.post("/login/", async (req, res) => {
       expiresIn: "12h",
     });
 
+    const profilePicBase64 = user.profilePic
+      ? user.profilePic.toString("base64")
+      : null;
+
     const userData =
       role === "teacher"
         ? {
@@ -51,6 +55,7 @@ router.post("/login/", async (req, res) => {
             email: user.email,
             facultyId: user.facultyId,
             department: user.department,
+            profilePic: profilePicBase64,
             role,
           }
         : {
@@ -62,6 +67,7 @@ router.post("/login/", async (req, res) => {
             year: user.year,
             semester: user.semester,
             department: user.department,
+            profilePic: profilePicBase64,
             role,
             class: user.class
               ? {
@@ -72,7 +78,6 @@ router.post("/login/", async (req, res) => {
                 }
               : null,
           };
-
     res.json({
       success: true,
       serverTime: Date.now(),

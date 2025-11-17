@@ -64,6 +64,10 @@ const Student = sequelize.define(
       onUpdate: "CASCADE",
       onDelete: "SET NULL",
     },
+    profilePic: {
+      type: DataTypes.BLOB("long"),
+      allowNull: true,
+    },
   },
   { timestamps: true }
 );
