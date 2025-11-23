@@ -2,56 +2,50 @@ name: CI
 
 on:
   push:
-    branches: [ main ]
+    branches: ["main"]
   pull_request:
-    branches: [ main ]
-
-defaults:
-  run:
-    working-directory: backend_api
+    branches: ["main"]
 
 jobs:
-  build:
+  build-and-test:
     runs-on: ubuntu-latest
-    
+
     steps:
-    - uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Read config.json
-      id: config
-      uses: actions/github-script@v6
-      with:
-        script: |
-          const fs = require('fs');
-          const config = JSON.parse(fs.readFileSync('.github/workflows/config.json', 'utf8'));
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
 
-          core.setOutput("install", config.install || "");
-          core.setOutput("build", config.build || "");
-          core.setOutput("test", config.test || "");
-          core.setOutput("start", config.start || "");
-          
-          core.setOutput("runtime", config.runtime || "node");
-          core.setOutput("runtime_version", config.runtime_version || "");
-
-    - name: Setup Environment
-      uses: ./.github/actions/setup-environment
-      with:
-        runtime: ${{ steps.config.outputs.runtime }}
-        version: ${{ steps.config.outputs.runtime_version }}
+      # ───────────────────────────────
+      # Backend API
+      # ───────────────────────────────
+      - name: Install backend dependencies
         working-directory: backend_api
+        run: npm install
 
-    - name: Install dependencies
-      if: ${{ steps.config.outputs.install != '' }}
-      run: ${{ steps.config.outputs.install }}
+      - name: Run backend tests
+        working-directory: backend_api
+        run: npm test --if-present
 
-    - name: Run tests
-      if: ${{ steps.config.outputs.test != '' }}
-      run: ${{ steps.config.outputs.test }}
+      - name: Build backend
+        working-directory: backend_api
+        run: npm run build --if-present
 
-    - name: Build project
-      if: ${{ steps.config.outputs.build != '' }}
-      run: ${{ steps.config.outputs.build }}
+      # ───────────────────────────────
+      # Teacher App
+      # ───────────────────────────────
+      - name: Install teacher app dependencies
+        working-directory: teacher_app
+        run: npm install
 
-    - name: Start
-      if: ${{ steps.config.outputs.start != '' }}
-      run: ${{ steps.config.outputs.start }}
+      - name: Run teacher tests
+        working-directory: teacher_app
+        run: npm test --if-present
+
+      - name: Build teacher app
+        working-directory: teacher_app
+        run: npm run build --if-present
