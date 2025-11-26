@@ -2,9 +2,9 @@ name: Stack-Agnostic CI
 
 on:
   push:
-    branches: ["test"]
+    branches: ["main"]
   pull_request:
-    branches: ["test"]
+    branches: ["main"]
 
 jobs:
   prepare-matrix:
