@@ -48,6 +48,62 @@ jobs:
           app-id: ${{ matrix.app-id }}
           config-path: ./config.json
 
+      ######################################################################
+      #                         DYNAMIC LINTING                            #
+      ######################################################################
+
+      - name: Prepare lint paths
+        id: lintprep
+        shell: bash
+        run: |
+          echo "Lint enabled: ${{ steps.setup.outputs.lint }}"
+          echo "Lint path raw JSON: ${{ steps.setup.outputs.lint_path }}"
+
+          if [ "${{ steps.setup.outputs.lint }}" != "true" ]; then
+            echo "LINT_TARGETS=" >> $GITHUB_ENV
+            exit 0
+          fi
+
+          LINT_PATH_JSON='${{ steps.setup.outputs.lint_path }}'
+
+          # Case 1: null → lint entire directory
+          if [ "$LINT_PATH_JSON" = "null" ]; then
+            echo "LINT_TARGETS=${{ steps.setup.outputs.directory }}" >> $GITHUB_ENV
+            exit 0
+          fi
+
+          # Case 2: string → convert to list
+          # Case 3: object → convert values to list
+          TARGETS=$(echo "$LINT_PATH_JSON" | jq -r '
+            if type=="string" then
+              [.]          # convert single string to array
+            else
+              [.[]]        # get all values from object
+            end | join(" ")
+          ')
+
+          # Targets are relative; convert to full paths
+          FULL=""
+          for t in $TARGETS; do
+            FULL="$FULL ${{ steps.setup.outputs.directory }}/$t"
+          done
+
+          echo "LINT_TARGETS=$FULL" >> $GITHUB_ENV
+          echo "Computed LINT_TARGETS: $FULL"
+
+      - name: Run Super-Linter
+        if: env.LINT_TARGETS != ''
+        uses: super-linter/super-linter@v6
+        env:
+          DEFAULT_BRANCH: "main"
+          # We lint ONLY the computed paths
+          FILTER_REGEX_INCLUDE: ${{ env.LINT_TARGETS }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      ######################################################################
+      #                         DOCKER BUILD                               #
+      ######################################################################
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
 
@@ -67,7 +123,7 @@ jobs:
           COMMIT_SHA: ${{ github.sha }}
         run: |
           echo "📝 DEBUG: APP_DIR='$APP_DIR'"
-
+          
           IMAGE_APP=$(basename "$APP_DIR")
           echo "📝 DEBUG: IMAGE_APP='$IMAGE_APP'"
 

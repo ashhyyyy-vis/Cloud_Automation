@@ -12,23 +12,29 @@ inputs:
 
 outputs:
   directory:
-    description: 'The directory of the app from config'
+    description: 'The directory of the app'
     value: ${{ steps.config.outputs.directory }}
   type:
-    description: 'The type of the app from config'
+    description: 'The type of the app'
     value: ${{ steps.config.outputs.type }}
   version:
-    description: 'The version from config'
+    description: 'The version'
     value: ${{ steps.config.outputs.version }}
   install-command:
-    description: 'The install command from config'
+    description: 'Install command'
     value: ${{ steps.config.outputs.install_command }}
   test-command:
-    description: 'The test command from config'
+    description: 'Test command'
     value: ${{ steps.config.outputs.test_command }}
   build-command:
-    description: 'The build command from config'
+    description: 'Build command'
     value: ${{ steps.config.outputs.build_command }}
+  lint:
+    description: 'Whether linting is enabled'
+    value: ${{ steps.config.outputs.lint }}
+  lint-path:
+    description: 'Optional linting subdirectory'
+    value: ${{ steps.config.outputs.lint_path }}
 
 runs:
   using: 'composite'
@@ -51,6 +57,13 @@ runs:
         echo "install_command=$(echo "$CONFIG" | jq -r '.["install-command"]')" >> $GITHUB_OUTPUT
         echo "test_command=$(echo "$CONFIG" | jq -r '.["test-command"]')" >> $GITHUB_OUTPUT
         echo "build_command=$(echo "$CONFIG" | jq -r '.["build-command"]')" >> $GITHUB_OUTPUT
+
+        # NEW LINT FIELDS
+        echo "lint=$(echo "$CONFIG" | jq -r '.lint')" >> $GITHUB_OUTPUT
+        # Check if lint-path is an object or a string or null
+        LINT_PATH=$(echo "$CONFIG" | jq -c '."lint-path"')
+        echo "lint_path=$LINT_PATH" >> $GITHUB_OUTPUT
+
 
     # Setup Node
     - name: Setup Node.js
@@ -88,18 +101,23 @@ runs:
       with:
         go-version: ${{ steps.config.outputs.version }}
 
-    # Shared Steps
+    # Install dependencies
     - name: Install dependencies
       shell: bash
       working-directory: ${{ steps.config.outputs.directory }}
       run: ${{ steps.config.outputs.install_command }}
 
+    # Run tests
     - name: Run tests
       shell: bash
       working-directory: ${{ steps.config.outputs.directory }}
       run: ${{ steps.config.outputs.test_command }}
 
+    # Build application
     - name: Build application
       shell: bash
       working-directory: ${{ steps.config.outputs.directory }}
       run: ${{ steps.config.outputs.build_command }}
+
+    # Lint
+ 
