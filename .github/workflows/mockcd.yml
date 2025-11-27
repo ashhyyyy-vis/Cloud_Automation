@@ -1,7 +1,10 @@
 name: Deploy (Mock AWS)
 
 on:
-  workflow_dispatch:
+  workflow_run:
+    workflows: ["Stack-Agnostic CI"]
+    types:
+      - completed
 
 jobs:
   prepare:
@@ -30,7 +33,7 @@ jobs:
             # Convert the output to a proper JSON array
             APP_IDS=$(echo "$APPS_JSON" | jq -r 'keys | tostring')
             echo "ids=$APP_IDS" >> $GITHUB_OUTPUT
-            
+
   deploy:
     needs: prepare
     runs-on: ubuntu-latest
