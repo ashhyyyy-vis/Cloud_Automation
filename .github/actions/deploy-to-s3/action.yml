@@ -13,7 +13,7 @@ inputs:
 
   aws-config-path:
     required: true
-    default: ./deployment-config.yaml   # <-- YAML file
+    default: ./frontend-config.yaml   # <-- YAML file
 
   aws-access-key-id:
     required: true
