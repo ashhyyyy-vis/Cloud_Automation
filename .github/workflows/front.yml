@@ -14,19 +14,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install yq
-        run: |
-          sudo wget -qO /usr/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
-          sudo chmod +x /usr/bin/yq
-
-      - id: read
-        name: Read frontend modules from config.yaml
+      - name: Read frontend modules from config.json
+        id: read
         shell: bash
         run: |
-          echo "Reading frontend modules from YAML..."
+          echo "Reading frontend modules (JSON)..."
 
-          # Extract keys under: apps → frontend
-          FRONTEND=$(yq -o=json '.apps.frontend | keys' config.yaml)
+          # Extract frontend keys: .apps.frontend | keys
+          FRONTEND=$(jq -c '.apps.frontend | keys' config.json)
 
           echo "Frontend apps: $FRONTEND"
           echo "matrix=$FRONTEND" >> $GITHUB_OUTPUT
@@ -34,6 +29,7 @@ jobs:
   deploy-frontend:
     needs: prepare-frontend-matrix
     runs-on: ubuntu-latest
+
     strategy:
       matrix:
         app-id: ${{ fromJson(needs.prepare-frontend-matrix.outputs.matrix) }}
@@ -46,7 +42,7 @@ jobs:
         with:
           app-type: frontend
           app-id: ${{ matrix.app-id }}
-          config-path: ./config.yaml
-          aws-config-path: ./frontend-config.yaml
+          config-path: ./config.json             # <-- JSON
+          aws-config-path: ./deployment-config.yaml  # <-- YAML
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}

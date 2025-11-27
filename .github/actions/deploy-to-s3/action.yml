@@ -1,5 +1,5 @@
 name: "Deploy Module to AWS S3"
-description: "Deploys a frontend module using config.yaml + deployment-config.yaml"
+description: "Deploys a frontend module using config.json + deployment-config.yaml"
 
 inputs:
   app-type:
@@ -9,11 +9,11 @@ inputs:
 
   config-path:
     required: true
-    default: ./config.yaml
+    default: ./config.json   # <-- JSON file
 
   aws-config-path:
     required: true
-    default: ./deployment-config.yaml
+    default: ./deployment-config.yaml   # <-- YAML file
 
   aws-access-key-id:
     required: true
@@ -25,18 +25,20 @@ runs:
   steps:
 
     ##################################################################
-    #                    INSTALL yq (YAML parser)                    #
+    #                    INSTALL jq + yq                             #
     ##################################################################
-    - name: Install yq
+    - name: Install jq + yq
       shell: bash
       run: |
+        sudo apt-get update -y
+        sudo apt-get install -y jq
         sudo wget -qO /usr/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
         sudo chmod +x /usr/bin/yq
 
     ##################################################################
-    #              READ MODULE CONFIG (from YAML)                    #
+    #                  READ MODULE CONFIG (JSON)                     #
     ##################################################################
-    - name: Read module config
+    - name: Read module config (JSON)
       id: cfg
       shell: bash
       run: |
@@ -44,16 +46,19 @@ runs:
         APP_ID="${{ inputs.app-id }}"
         APP_TYPE="${{ inputs.app-type }}"
 
-        # Extract from YAML: apps.<type>.<id>
-        APP=$(yq -o=json ".apps.${APP_TYPE}.${APP_ID} // {}" "$CFG")
+        # Extract JSON: .apps[type][id]
+        APP=$(jq -c \
+          --arg t "$APP_TYPE" \
+          --arg id "$APP_ID" \
+          '.apps[$t][$id] // null' "$CFG")
 
-        if [[ "$APP" == "{}" ]]; then
-          echo "❌ Module not found in YAML."
+        if [[ "$APP" == "null" ]]; then
+          echo "❌ Module not found in config.json"
           exit 1
         fi
 
         safe() {
-          echo "$APP" | yq -r ".$1 // \"\""
+          echo "$APP" | jq -r --arg k "$1" 'if has($k) then .[$k] else "" end'
         }
 
         DIR=$(safe "directory")
@@ -65,9 +70,9 @@ runs:
         echo "deploy=$DEPLOY"   >> $GITHUB_OUTPUT
 
     ##################################################################
-    #          READ AWS HOSTING CONFIG (from YAML)                   #
+    #              READ AWS HOSTING CONFIG (YAML)                    #
     ##################################################################
-    - name: Read AWS hosting config
+    - name: Read AWS hosting config (YAML)
       id: aws
       shell: bash
       run: |
@@ -75,16 +80,16 @@ runs:
         APP_ID="${{ inputs.app-id }}"
         APP_TYPE="${{ inputs.app-type }}"
 
-        # Extract from YAML: <type>.<id>
+        # Extract YAML: <type>.<id>
         APP=$(yq -o=json ".${APP_TYPE}.${APP_ID} // {}" "$AWS_CFG")
 
         if [[ "$APP" == "{}" ]]; then
-          echo "❌ AWS hosting info missing for module '$APP_ID'"
+          echo "❌ AWS hosting info missing for '${APP_ID}'"
           exit 1
         fi
 
-        BUCKET=$(echo "$APP" | yq -r '.bucket')
-        REGION=$(echo "$APP" | yq -r '.region')
+        BUCKET=$(echo "$APP" | yq -r '.s3_bucket // .bucket')
+        REGION=$(echo "$APP" | yq -r '.s3_region // .region')
 
         echo "bucket=$BUCKET" >> $GITHUB_OUTPUT
         echo "region=$REGION" >> $GITHUB_OUTPUT
@@ -97,11 +102,11 @@ runs:
       shell: bash
       working-directory: ${{ steps.cfg.outputs.directory }}
       run: |
-        echo "🏗️ Building..."
+        echo "🏗️ Building frontend..."
         ${{ steps.cfg.outputs.build }}
 
     ##################################################################
-    #                         AWS LOGIN                              #
+    #                           AWS LOGIN                            #
     ##################################################################
     - name: Configure AWS
       if: ${{ steps.cfg.outputs.deploy == 'true' }}
@@ -123,4 +128,4 @@ runs:
           s3://${{ steps.aws.outputs.bucket }} \
           --delete
 
-        echo "✨ Deployment to S3 complete."
+        echo "✨ Deployment completed to S3 bucket: ${{ steps.aws.outputs.bucket }}"
