@@ -27,9 +27,12 @@ jobs:
           BACKEND_APPS=$(jq -c '.apps.backend | keys' config.json || echo '[]')
           FRONTEND_APPS=$(jq -c '.apps.frontend | keys' config.json || echo '[]')
           
-          # Combine both arrays and make unique
-          MATRIX=$(jq -n --argjson b "$BACKEND_APPS" --argjson f "$FRONTEND_APPS" '$b + $f | unique')
-
+          # Combine both arrays, make unique, and format as a single line JSON array
+          MATRIX=$(jq -n --argjson b "$BACKEND_APPS" --argjson f "$FRONTEND_APPS" '$b + $f | unique | tostring')
+          
+          # Remove all whitespace from the JSON string for GitHub Actions
+          MATRIX=${MATRIX//[[:space:]]/}
+          
           echo "🔍 Extracted matrix: $MATRIX"
           echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
 
