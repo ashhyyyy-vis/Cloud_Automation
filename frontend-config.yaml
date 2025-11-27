@@ -1,9 +1,8 @@
 frontend:
   source_2:
-    image_repo: mock-user/teacher_app
-    region: local-test-1
     hosting: s3
-    s3_bucket: teacher-app-bucket
-    s3_region: ap-south-1
+    bucket: teacher-app-bucket
+    region: ap-south-1
+
     cloudfront_distribution_id: null
     cloudfront_invalidate: false
