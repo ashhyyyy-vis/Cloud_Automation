@@ -1,14 +1,19 @@
 name: "Deploy Module to AWS S3"
-description: "Deploys a frontend module from config.json safely"
+description: "Deploys a frontend module using config.json + aws.config.json"
 
 inputs:
   app-type:
     required: true
   app-id:
     required: true
+
   config-path:
     required: true
     default: ./config.json
+
+  aws-config-path:
+    required: true
+    default: ./aws.config.json
 
   aws-access-key-id:
     required: true
@@ -18,7 +23,10 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Read config
+    ##################################################################
+    #              READ MODULE CONFIG (build info)                   #
+    ##################################################################
+    - name: Read module config
       id: cfg
       shell: bash
       run: |
@@ -26,55 +34,90 @@ runs:
         APP_ID="${{ inputs.app-id }}"
         APP_TYPE="${{ inputs.app-type }}"
 
-        APP=$(jq -c --arg t "$APP_TYPE" --arg id "$APP_ID" \
-          '.apps[$t][$id] // null' "$CONFIG_PATH")
+        # Extract full module config
+        APP=$(jq -c \
+          --arg t "$APP_TYPE" \
+          --arg id "$APP_ID" \
+          '.apps[$t][$id] // null' \
+          "$CONFIG_PATH")
 
         if [[ "$APP" == "null" ]]; then
           echo "❌ Module not found."
           exit 1
         fi
 
-        safe_get() {
-          echo "$APP" | jq -r --arg k "$1" \
-            'if has($k) and .[$k] != null then .[$k] else "" end'
+        safe() {
+          echo "$APP" | jq -r --arg k "$1" 'if has($k) then .[$k] else "" end'
         }
 
-        DIR=$(safe_get "directory")
-        BUILD_CMD=$(safe_get "build-command")
-        DEPLOY=$(safe_get "deploy")
-        BUCKET=$(safe_get "s3-bucket")
-        REGION=$(safe_get "s3-region")
+        DIR=$(safe "directory")
+        BUILD_CMD=$(safe "build-command")
+        DEPLOY=$(safe "deploy")
 
-        echo "directory=$DIR" >> $GITHUB_OUTPUT
-        echo "build_command=$BUILD_CMD" >> $GITHUB_OUTPUT
-        echo "deploy=$DEPLOY" >> $GITHUB_OUTPUT
+        echo "directory=$DIR"       >> $GITHUB_OUTPUT
+        echo "build=$BUILD_CMD"     >> $GITHUB_OUTPUT
+        echo "deploy=$DEPLOY"       >> $GITHUB_OUTPUT
+
+    ##################################################################
+    #              READ AWS CONFIG (bucket + region)                 #
+    ##################################################################
+    - name: Read AWS hosting config
+      id: aws
+      shell: bash
+      run: |
+        AWS_CFG="${{ inputs.aws-config-path }}"
+        APP_ID="${{ inputs.app-id }}"
+        APP_TYPE="${{ inputs.app-type }}"
+
+        AWS_ENTRY=$(jq -c \
+          --arg t "$APP_TYPE" \
+          --arg id "$APP_ID" \
+          '.[$t][$id] // null' \
+          "$AWS_CFG")
+
+        if [[ "$AWS_ENTRY" == "null" ]]; then
+          echo "❌ AWS hosting info missing for module '$APP_ID'"
+          exit 1
+        fi
+
+        BUCKET=$(echo "$AWS_ENTRY" | jq -r '.bucket')
+        REGION=$(echo "$AWS_ENTRY" | jq -r '.region')
+
         echo "bucket=$BUCKET" >> $GITHUB_OUTPUT
         echo "region=$REGION" >> $GITHUB_OUTPUT
 
-    - name: Skip deploy
-      if: ${{ steps.cfg.outputs.deploy != 'true' }}
-      shell: bash
-      run: echo "🚫 Deploy disabled."
-
+    ##################################################################
+    #                         BUILD FRONTEND                         #
+    ##################################################################
     - name: Build frontend
       if: ${{ steps.cfg.outputs.deploy == 'true' }}
       shell: bash
       working-directory: ${{ steps.cfg.outputs.directory }}
-      run: ${{ steps.cfg.outputs.build_command }}
+      run: |
+        echo "🏗️ Building..."
+        ${{ steps.cfg.outputs.build }}
 
+    ##################################################################
+    #                         AWS LOGIN                              #
+    ##################################################################
     - name: Configure AWS
       if: ${{ steps.cfg.outputs.deploy == 'true' }}
       uses: aws-actions/configure-aws-credentials@v2
       with:
         aws-access-key-id: ${{ inputs.aws-access-key-id }}
         aws-secret-access-key: ${{ inputs.aws-secret-access-key }}
-        aws-region: ${{ steps.cfg.outputs.region }}
+        aws-region: ${{ steps.aws.outputs.region }}
 
-    - name: Upload to S3
+    ##################################################################
+    #                           DEPLOY                                #
+    ##################################################################
+    - name: Deploy to S3
       if: ${{ steps.cfg.outputs.deploy == 'true' }}
       shell: bash
       run: |
         aws s3 sync \
           ${{ steps.cfg.outputs.directory }}/build \
-          s3://${{ steps.cfg.outputs.bucket }} \
+          s3://${{ steps.aws.outputs.bucket }} \
           --delete
+
+        echo "✨ Deployment to S3 complete."
