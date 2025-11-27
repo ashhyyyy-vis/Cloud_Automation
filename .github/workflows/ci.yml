@@ -1,5 +1,5 @@
 name: Stack-Agnostic CI
-#🏳️‍⚧️
+#🏳️‍⚧️✅
 
 on:
   push:
