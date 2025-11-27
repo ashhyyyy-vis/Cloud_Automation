@@ -6,41 +6,57 @@ on:
     types: [completed]
 
 jobs:
+
+  ####################################################################
+  #                            PREPARE                               #
+  ####################################################################
   prepare:
     runs-on: ubuntu-latest
     outputs:
       apps-json: ${{ steps.read.outputs.apps }}
-      app-ids: ${{ steps.app-ids.outputs.ids }}
-      apps-b64: ${{ steps.app-ids.outputs.apps_b64 }}
+      app-ids: ${{ steps.ids.outputs.ids }}
+      apps-b64: ${{ steps.ids.outputs.apps_b64 }}
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Read deployment-config.json
+      - name: Install yq
+        run: |
+          sudo wget -qO /usr/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/bin/yq
+
+      - name: Read backend section from deployment-config.yaml
         id: read
         shell: bash
         run: |
-          if [ ! -f deployment-config.json ]; then
-            echo "ERROR: deployment-config.json not found"
+          if [ ! -f deployment-config.yaml ]; then
+            echo "ERROR: deployment-config.yaml not found"
             exit 1
           fi
 
-          # READ ONLY BACKEND
-          APPS=$(jq -c '.backend' deployment-config.json)
+          # Extract backend block
+          APPS=$(yq -o=json '.backend' deployment-config.yaml)
+
           echo "apps=$APPS" >> $GITHUB_OUTPUT
 
       - name: Extract backend app IDs
-        id: app-ids
+        id: ids
         shell: bash
         run: |
           RAW='${{ steps.read.outputs.apps }}'
 
+          # Base64 encode block
           RAW_B64=$(printf "%s" "$RAW" | base64 -w0)
           echo "apps_b64=$RAW_B64" >> $GITHUB_OUTPUT
 
-          IDS=$(echo "$RAW" | jq -c 'keys')
+          # Extract YAML keys → JSON array
+          IDS=$(echo "$RAW" | yq -o=json 'keys')
           echo "ids=$IDS" >> $GITHUB_OUTPUT
 
+
+  ####################################################################
+  #                           DEPLOY                                 #
+  ####################################################################
   deploy:
     needs: prepare
     runs-on: ubuntu-latest
@@ -52,8 +68,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
+      - name: Install yq
+        run: |
+          sudo wget -qO /usr/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/bin/yq
 
       - name: Parse backend app config
         id: parse
@@ -62,22 +80,24 @@ jobs:
           APP_KEY="${{ matrix.app-id }}"
           APP_KEY=$(echo "$APP_KEY" | sed 's/"//g')
 
+          # Decode backend section
           APPS_JSON=$(echo "${{ needs.prepare.outputs.apps-b64 }}" | base64 -d)
 
-          APP_JSON=$(printf "%s" "$APPS_JSON" | jq -c --arg k "$APP_KEY" '.[$k]')
+          # Extract selected backend module
+          APP_JSON=$(printf "%s" "$APPS_JSON" | yq -o=json ".\"$APP_KEY\"")
 
-          echo "$APP_JSON" | jq '.'
+          echo "$APP_JSON" | yq '.'
 
-          echo "image_repo=$(echo "$APP_JSON" | jq -r '.image_repo')" >> $GITHUB_OUTPUT
-          echo "launch_template_id=$(echo "$APP_JSON" | jq -r '.launch_template_id')" >> $GITHUB_OUTPUT
-          echo "asg_name=$(echo "$APP_JSON" | jq -r '.asg_name')" >> $GITHUB_OUTPUT
-          echo "region=$(echo "$APP_JSON" | jq -r '.region')" >> $GITHUB_OUTPUT
-          echo "port=$(echo "$APP_JSON" | jq -r '.port')" >> $GITHUB_OUTPUT
-          echo "health_path=$(echo "$APP_JSON" | jq -r '.health_path')" >> $GITHUB_OUTPUT
-          echo "instance_warmup=$(echo "$APP_JSON" | jq -r '.instance_warmup')" >> $GITHUB_OUTPUT
-          echo "min_healthy_percent=$(echo "$APP_JSON" | jq -r '.min_healthy_percent')" >> $GITHUB_OUTPUT
-          echo "user_data_template=$(echo "$APP_JSON" | jq -r '.user_data_template')" >> $GITHUB_OUTPUT
-          echo "ssm_param_name=$(echo "$APP_JSON" | jq -r '.ssm_param_name')" >> $GITHUB_OUTPUT
+          echo "image_repo=$(echo "$APP_JSON" | yq -r '.image_repo')" >> $GITHUB_OUTPUT
+          echo "launch_template_id=$(echo "$APP_JSON" | yq -r '.launch_template_id')" >> $GITHUB_OUTPUT
+          echo "asg_name=$(echo "$APP_JSON" | yq -r '.asg_name')" >> $GITHUB_OUTPUT
+          echo "region=$(echo "$APP_JSON" | yq -r '.region')" >> $GITHUB_OUTPUT
+          echo "port=$(echo "$APP_JSON" | yq -r '.port')" >> $GITHUB_OUTPUT
+          echo "health_path=$(echo "$APP_JSON" | yq -r '.health_path')" >> $GITHUB_OUTPUT
+          echo "instance_warmup=$(echo "$APP_JSON" | yq -r '.instance_warmup')" >> $GITHUB_OUTPUT
+          echo "min_healthy_percent=$(echo "$APP_JSON" | yq -r '.min_healthy_percent')" >> $GITHUB_OUTPUT
+          echo "user_data_template=$(echo "$APP_JSON" | yq -r '.user_data_template')" >> $GITHUB_OUTPUT
+          echo "ssm_param_name=$(echo "$APP_JSON" | yq -r '.ssm_param_name')" >> $GITHUB_OUTPUT
 
       - name: Mock AWS Credentials
         run: |

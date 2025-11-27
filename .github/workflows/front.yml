@@ -10,19 +10,25 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.read.outputs.matrix }}
+
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install yq
+        run: |
+          sudo wget -qO /usr/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/bin/yq
+
       - id: read
-        name: Read frontend modules from config.json
+        name: Read frontend modules from config.yaml
         shell: bash
         run: |
-          echo "Reading frontend modules..."
+          echo "Reading frontend modules from YAML..."
 
-          FRONTEND=$(jq -c '.apps.frontend | keys // []' config.json)
+          # Extract keys under: apps → frontend
+          FRONTEND=$(yq -o=json '.apps.frontend | keys' config.yaml)
 
           echo "Frontend apps: $FRONTEND"
-
           echo "matrix=$FRONTEND" >> $GITHUB_OUTPUT
 
   deploy-frontend:
@@ -40,7 +46,7 @@ jobs:
         with:
           app-type: frontend
           app-id: ${{ matrix.app-id }}
-          config-path: ./config.json
-          aws-config-path: ./deployment-config.json
+          config-path: ./config.yaml
+          aws-config-path: ./frontend-config.yaml
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}

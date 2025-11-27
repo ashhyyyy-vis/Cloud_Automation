@@ -1,5 +1,5 @@
 name: "Deploy Module to AWS S3"
-description: "Deploys a frontend module using config.json + aws.config.json"
+description: "Deploys a frontend module using config.yaml + deployment-config.yaml"
 
 inputs:
   app-type:
@@ -9,11 +9,11 @@ inputs:
 
   config-path:
     required: true
-    default: ./config.json
+    default: ./config.yaml
 
   aws-config-path:
     required: true
-    default: ./deployment-config.json
+    default: ./deployment-config.yaml
 
   aws-access-key-id:
     required: true
@@ -23,43 +23,49 @@ inputs:
 runs:
   using: composite
   steps:
+
     ##################################################################
-    #              READ MODULE CONFIG (build info)                   #
+    #                    INSTALL yq (YAML parser)                    #
+    ##################################################################
+    - name: Install yq
+      shell: bash
+      run: |
+        sudo wget -qO /usr/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+        sudo chmod +x /usr/bin/yq
+
+    ##################################################################
+    #              READ MODULE CONFIG (from YAML)                    #
     ##################################################################
     - name: Read module config
       id: cfg
       shell: bash
       run: |
-        CONFIG_PATH="${{ inputs.config-path }}"
+        CFG="${{ inputs.config-path }}"
         APP_ID="${{ inputs.app-id }}"
         APP_TYPE="${{ inputs.app-type }}"
 
-        # Extract full module config
-        APP=$(jq -c \
-          --arg t "$APP_TYPE" \
-          --arg id "$APP_ID" \
-          '.apps[$t][$id] // null' \
-          "$CONFIG_PATH")
+        # Extract from YAML: apps.<type>.<id>
+        APP=$(yq -o=json ".apps.${APP_TYPE}.${APP_ID} // {}" "$CFG")
 
-        if [[ "$APP" == "null" ]]; then
-          echo "❌ Module not found."
+        if [[ "$APP" == "{}" ]]; then
+          echo "❌ Module not found in YAML."
           exit 1
         fi
 
         safe() {
-          echo "$APP" | jq -r --arg k "$1" 'if has($k) then .[$k] else "" end'
+          echo "$APP" | yq -r ".$1 // \"\""
         }
 
         DIR=$(safe "directory")
         BUILD_CMD=$(safe "build-command")
         DEPLOY=$(safe "deploy")
 
-        echo "directory=$DIR"       >> $GITHUB_OUTPUT
-        echo "build=$BUILD_CMD"     >> $GITHUB_OUTPUT
-        echo "deploy=$DEPLOY"       >> $GITHUB_OUTPUT
+        echo "directory=$DIR"   >> $GITHUB_OUTPUT
+        echo "build=$BUILD_CMD" >> $GITHUB_OUTPUT
+        echo "deploy=$DEPLOY"   >> $GITHUB_OUTPUT
 
     ##################################################################
-    #              READ AWS CONFIG (bucket + region)                 #
+    #          READ AWS HOSTING CONFIG (from YAML)                   #
     ##################################################################
     - name: Read AWS hosting config
       id: aws
@@ -69,19 +75,16 @@ runs:
         APP_ID="${{ inputs.app-id }}"
         APP_TYPE="${{ inputs.app-type }}"
 
-        AWS_ENTRY=$(jq -c \
-          --arg t "$APP_TYPE" \
-          --arg id "$APP_ID" \
-          '.[$t][$id] // null' \
-          "$AWS_CFG")
+        # Extract from YAML: <type>.<id>
+        APP=$(yq -o=json ".${APP_TYPE}.${APP_ID} // {}" "$AWS_CFG")
 
-        if [[ "$AWS_ENTRY" == "null" ]]; then
+        if [[ "$APP" == "{}" ]]; then
           echo "❌ AWS hosting info missing for module '$APP_ID'"
           exit 1
         fi
 
-        BUCKET=$(echo "$AWS_ENTRY" | jq -r '.bucket')
-        REGION=$(echo "$AWS_ENTRY" | jq -r '.region')
+        BUCKET=$(echo "$APP" | yq -r '.bucket')
+        REGION=$(echo "$APP" | yq -r '.region')
 
         echo "bucket=$BUCKET" >> $GITHUB_OUTPUT
         echo "region=$REGION" >> $GITHUB_OUTPUT
