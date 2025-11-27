@@ -33,23 +33,25 @@ jobs:
             exit 1
           fi
 
-          # Extract ONLY backend section and convert to compact JSON
+          # Extract ONLY backend section → compact JSON
           APPS=$(yq -o=json '.backend' deployment-config.yaml | jq -c '.')
+
           echo "apps=$APPS" >> $GITHUB_OUTPUT
 
       - name: Extract backend app IDs
         id: ids
         shell: bash
         run: |
-          RAW='${{ steps.read.outputs.apps }}'
+          RAW="${{ steps.read.outputs.apps }}"
 
-          # Base64 encode block
+          # Base64 encode compact JSON
           RAW_B64=$(printf "%s" "$RAW" | base64 -w0)
           echo "apps_b64=$RAW_B64" >> $GITHUB_OUTPUT
 
-          # Extract YAML keys → JSON array
-          IDS=$(echo "$RAW" | yq -o=json 'keys')
+          # Extract KEYS using jq (not yq!)
+          IDS=$(echo "$RAW" | jq -c 'keys')
           echo "ids=$IDS" >> $GITHUB_OUTPUT
+
 
   ####################################################################
   #                           DEPLOY                                 #
