@@ -1,5 +1,5 @@
 name: "Deploy Module to AWS S3"
-description: "Deploys a frontend module using config.json + deployment-config.yaml"
+description: "Deploys a frontend module using config.json + SSM parameters"
 
 inputs:
   app-type:
@@ -9,11 +9,7 @@ inputs:
 
   config-path:
     required: true
-    default: ./config.json   # <-- JSON file
-
-  aws-config-path:
-    required: true
-    default: ./frontend-config.yaml   # <-- YAML file
+    default: ./config.json
 
   aws-access-key-id:
     required: true
@@ -25,20 +21,18 @@ runs:
   steps:
 
     ##################################################################
-    #                    INSTALL jq + yq                             #
+    #                 INSTALL jq (JSON parser)                       #
     ##################################################################
-    - name: Install jq + yq
+    - name: Install jq
       shell: bash
       run: |
         sudo apt-get update -y
         sudo apt-get install -y jq
-        sudo wget -qO /usr/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
-        sudo chmod +x /usr/bin/yq
 
     ##################################################################
-    #                  READ MODULE CONFIG (JSON)                     #
+    #                READ MODULE CONFIG (from JSON)                  #
     ##################################################################
-    - name: Read module config (JSON)
+    - name: Read module config
       id: cfg
       shell: bash
       run: |
@@ -46,10 +40,7 @@ runs:
         APP_ID="${{ inputs.app-id }}"
         APP_TYPE="${{ inputs.app-type }}"
 
-        # Extract JSON: .apps[type][id]
-        APP=$(jq -c \
-          --arg t "$APP_TYPE" \
-          --arg id "$APP_ID" \
+        APP=$(jq -c --arg t "$APP_TYPE" --arg id "$APP_ID" \
           '.apps[$t][$id] // null' "$CFG")
 
         if [[ "$APP" == "null" ]]; then
@@ -70,26 +61,28 @@ runs:
         echo "deploy=$DEPLOY"   >> $GITHUB_OUTPUT
 
     ##################################################################
-    #              READ AWS HOSTING CONFIG (YAML)                    #
+    #             READ AWS HOSTING CONFIG (FROM SSM)                 #
     ##################################################################
-    - name: Read AWS hosting config (YAML)
+    - name: Fetch hosting config from SSM
       id: aws
       shell: bash
       run: |
-        AWS_CFG="${{ inputs.aws-config-path }}"
         APP_ID="${{ inputs.app-id }}"
         APP_TYPE="${{ inputs.app-type }}"
 
-        # Extract YAML: <type>.<id>
-        APP=$(yq -o=json ".${APP_TYPE}.${APP_ID} // {}" "$AWS_CFG")
+        # SSM parameter paths
+        BUCKET_PARAM="/${APP_TYPE}/${APP_ID}/bucket"
+        REGION_PARAM="/${APP_TYPE}/${APP_ID}/region"
 
-        if [[ "$APP" == "{}" ]]; then
-          echo "❌ AWS hosting info missing for '${APP_ID}'"
+        BUCKET=$(aws ssm get-parameter --name "$BUCKET_PARAM" --query "Parameter.Value" --output text 2>/dev/null || true)
+        REGION=$(aws ssm get-parameter --name "$REGION_PARAM" --query "Parameter.Value" --output text 2>/dev/null || true)
+
+        if [[ -z "$BUCKET" || -z "$REGION" ]]; then
+          echo "❌ Missing SSM params:"
+          echo "   $BUCKET_PARAM → '$BUCKET'"
+          echo "   $REGION_PARAM → '$REGION'"
           exit 1
         fi
-
-        BUCKET=$(echo "$APP" | yq -r '.s3_bucket // .bucket')
-        REGION=$(echo "$APP" | yq -r '.s3_region // .region')
 
         echo "bucket=$BUCKET" >> $GITHUB_OUTPUT
         echo "region=$REGION" >> $GITHUB_OUTPUT
@@ -106,7 +99,7 @@ runs:
         ${{ steps.cfg.outputs.build }}
 
     ##################################################################
-    #                           AWS LOGIN                            #
+    #                        AWS CREDENTIALS                         #
     ##################################################################
     - name: Configure AWS
       if: ${{ steps.cfg.outputs.deploy == 'true' }}
