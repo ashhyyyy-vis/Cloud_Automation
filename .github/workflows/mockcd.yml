@@ -6,7 +6,6 @@ on:
     types: [completed]
 
 jobs:
-
   ####################################################################
   #                            PREPARE                               #
   ####################################################################
@@ -25,7 +24,7 @@ jobs:
           sudo wget -qO /usr/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
           sudo chmod +x /usr/bin/yq
 
-      - name: Read backend section from deployment-config.yaml
+      - name: Read deployment-config.yaml
         id: read
         shell: bash
         run: |
@@ -34,9 +33,8 @@ jobs:
             exit 1
           fi
 
-          # Extract backend block
-          APPS=$(yq -o=json '.backend' deployment-config.yaml)
-
+          # Extract ONLY backend section and convert to compact JSON
+          APPS=$(yq -o=json '.backend' deployment-config.yaml | jq -c '.')
           echo "apps=$APPS" >> $GITHUB_OUTPUT
 
       - name: Extract backend app IDs
@@ -52,7 +50,6 @@ jobs:
           # Extract YAML keys → JSON array
           IDS=$(echo "$RAW" | yq -o=json 'keys')
           echo "ids=$IDS" >> $GITHUB_OUTPUT
-
 
   ####################################################################
   #                           DEPLOY                                 #
