@@ -3,22 +3,44 @@ name: Deploy All Frontends
 on:
   workflow_run:
     workflows: ["Stack-Agnostic CI"]
-    types:
-      - completed
+    types: [completed]
 
 jobs:
+  prepare-frontend-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.read.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: read
+        name: Read frontend modules from config.json
+        shell: bash
+        run: |
+          echo "Reading frontend modules..."
+
+          FRONTEND=$(jq -c '.apps.frontend | keys // []' config.json)
+
+          echo "Frontend apps: $FRONTEND"
+
+          echo "matrix=$FRONTEND" >> $GITHUB_OUTPUT
+
   deploy-frontend:
+    needs: prepare-frontend-matrix
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        app-id: ["source_2"]  # Add your frontend app ID here
+        app-id: ${{ fromJson(needs.prepare-frontend-matrix.outputs.matrix) }}
+
     steps:
       - uses: actions/checkout@v4
+
       - name: Deploy Frontend
         uses: ./.github/actions/deploy-to-s3
         with:
           app-type: frontend
           app-id: ${{ matrix.app-id }}
           config-path: ./config.json
+          aws-config-path: ./aws.config.json
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
