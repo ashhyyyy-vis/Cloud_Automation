@@ -20,7 +20,7 @@
     "source_2": {
       "directory": "App/teacher_app",
       "type": "node",
-      "version": "18",
+      "version": "20.19",
       "lint": true,
       "lint-path": {
         "s1": "public",
