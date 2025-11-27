@@ -1,0 +1,146 @@
+name: Deploy (Local Simulation)
+
+on:
+  workflow_run:
+    workflows: ["Stack-Agnostic CI"]
+    types:
+      - completed
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      apps-json: ${{ steps.read.outputs.apps }}
+      app-ids: ${{ steps.ids.outputs.ids }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read deployment-config.json
+        id: read
+        run: |
+          if [ ! -f deployment-config.json ]; then
+            echo "❌ deployment-config.json not found"
+            exit 1
+          fi
+
+          APPS=$(jq -c '.apps' deployment-config.json)
+          echo "apps=$APPS" >> $GITHUB_OUTPUT
+
+      - name: Extract app IDs
+        id: ids
+        run: |
+          RAW='${{ steps.read.outputs.apps }}'
+          IDS=$(echo "$RAW" | jq -r 'keys')
+          echo "ids=$IDS" >> $GITHUB_OUTPUT
+
+  deploy:
+    needs: prepare
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        app-id: ${{ fromJson(needs.prepare.outputs.app-ids) }}
+      fail-fast: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Parse config for this app
+        id: parse
+        run: |
+          APP_KEY="${{ matrix.app-id }}"
+          APPS_JSON='${{ needs.prepare.outputs.apps-json }}'
+          APP_JSON=$(echo "$APPS_JSON" | jq -c --arg k "$APP_KEY" '.[$k]')
+
+          echo "Selected app: $APP_KEY"
+          echo "Config: $APP_JSON"
+
+          echo "image_repo=$(echo "$APP_JSON" | jq -r '.image_repo')" >> $GITHUB_OUTPUT
+          echo "launch_template_id=$(echo "$APP_JSON" | jq -r '.launch_template_id')" >> $GITHUB_OUTPUT
+          echo "asg_name=$(echo "$APP_JSON" | jq -r '.asg_name')" >> $GITHUB_OUTPUT
+          echo "region=$(echo "$APP_JSON" | jq -r '.region')" >> $GITHUB_OUTPUT
+          echo "port=$(echo "$APP_JSON" | jq -r '.port')" >> $GITHUB_OUTPUT
+          echo "health_path=$(echo "$APP_JSON" | jq -r '.health_path')" >> $GITHUB_OUTPUT
+          echo "warmup=$(echo "$APP_JSON" | jq -r '.instance_warmup')" >> $GITHUB_OUTPUT
+          echo "minheal=$(echo "$APP_JSON" | jq -r '.min_healthy_percent')" >> $GITHUB_OUTPUT
+          echo "ud_template=$(echo "$APP_JSON" | jq -r '.user_data_template')" >> $GITHUB_OUTPUT
+          echo "ssm_param=$(echo "$APP_JSON" | jq -r '.ssm_param_name')" >> $GITHUB_OUTPUT
+
+      - name: Simulate AWS credential setup
+        run: |
+          echo "🔧 Local Mode: Skipping AWS credential setup."
+          echo "(Would assume role: ${{ secrets.AWS_ROLE_TO_ASSUME }})"
+
+      - name: Compute runtime vars
+        id: vars
+        run: |
+          echo "image_tag=${{ github.sha }}" >> $GITHUB_OUTPUT
+          echo "image_repo=${{ steps.parse.outputs.image_repo }}" >> $GITHUB_OUTPUT
+
+      - name: Simulate SSM write
+        if: ${{ steps.parse.outputs.ud_template == 'ssm' }}
+        run: |
+          echo "📦 Local Mode: Would write to SSM:"
+          echo "SSM Param = '${{ steps.parse.outputs.ssm_param }}'"
+          echo "Value = '${{ steps.vars.outputs.image_repo }}:${{ steps.vars.outputs.image_tag }}'"
+
+      - name: Generate user-data script
+        if: ${{ steps.parse.outputs.ud_template != 'ssm' }}
+        id: userdata
+        run: |
+          IMAGE="${{ steps.vars.outputs.image_repo }}:${{ steps.vars.outputs.image_tag }}"
+          PORT=${{ steps.parse.outputs.port }}
+
+          echo "🔧 Creating user-data.sh (local mode)..."
+          {
+            echo "#!/bin/bash"
+            echo "set -e"
+            echo "IMAGE_FULL=\"$IMAGE\""
+            echo "docker pull \$IMAGE_FULL || true"
+            echo "docker stop myapp || true"
+            echo "docker rm myapp || true"
+            echo "docker run -d --name myapp --restart always -p $PORT:$PORT \$IMAGE_FULL"
+          } > user-data.sh
+
+          echo "Generated user-data.sh:"
+          cat user-data.sh
+
+          USERDATA_B64=$(base64 -w 0 user-data.sh)
+          echo "userdata_b64=$USERDATA_B64" >> $GITHUB_OUTPUT
+
+      - name: Simulate Launch Template Update
+        if: ${{ steps.parse.outputs.ud_template != 'ssm' }}
+        run: |
+          echo "🚀 Local Mode: Would create new LT version:"
+          echo "Launch Template ID: ${{ steps.parse.outputs.launch_template_id }}"
+          echo "UserData (base64):"
+          echo "${{ steps.userdata.outputs.userdata_b64 }}"
+          echo "Simulated LT version = 42 (always)"
+
+      - name: Simulate ASG Update
+        run: |
+          echo "🚀 Local Mode: Would update ASG:"
+          echo "ASG Name: ${{ steps.parse.outputs.asg_name }}"
+          echo "New Launch Template Version: 42"
+
+      - name: Simulate Instance Refresh
+        run: |
+          echo "🔄 Local Mode: Would start instance refresh:"
+          echo "MinHealthy = ${{ steps.parse.outputs.minheal }}"
+          echo "Warmup = ${{ steps.parse.outputs.warmup }}"
+          echo "Simulated Refresh ID = refresh-123"
+
+      - name: Simulate Waiting for Refresh
+        run: |
+          echo "⏳ Local Mode: Simulating wait..."
+          sleep 2
+          echo "Refresh successful!"
+
+      - name: Simulated Smoke Test
+        run: |
+          echo "🧪 Local Mode: Smoke test always passes."
+          exit 0

@@ -1,0 +1,35 @@
+{
+  "apps": {
+    "source_1": {
+      "image_repo": "mock-user/backend_api",
+      "launch_template_id": "lt-mock-backend-123",
+      "asg_name": "asg-backend-mock",
+      "region": "local-test-1",
+
+      "port": 3001,
+      "health_path": "/health",
+
+      "instance_warmup": 30,
+      "min_healthy_percent": 90,
+
+      "user_data_template": "userdata",
+      "ssm_param_name": "ssm-backend-image"
+    },
+
+    "source_2": {
+      "image_repo": "mock-user/teacher_app",
+      "launch_template_id": "lt-mock-teacher-456",
+      "asg_name": "asg-teacher-mock",
+      "region": "local-test-1",
+
+      "port": 3002,
+      "health_path": "/health",
+
+      "instance_warmup": 30,
+      "min_healthy_percent": 90,
+
+      "user_data_template": "userdata",
+      "ssm_param_name": "ssm-teacher-image"
+    }
+  }
+}
