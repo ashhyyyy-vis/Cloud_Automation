@@ -11,14 +11,37 @@ inputs:
     default: ./config.json
 
 outputs:
-  directory:        { value: ${{ steps.config.outputs.directory }} }
-  type:             { value: ${{ steps.config.outputs.type }} }
-  version:          { value: ${{ steps.config.outputs.version }} }
-  install-command:  { value: ${{ steps.config.outputs.install_command }} }
-  test-command:     { value: ${{ steps.config.outputs.test_command }} }
-  build-command:    { value: ${{ steps.config.outputs.build_command }} }
-  lint:             { value: ${{ steps.config.outputs.lint }} }
-  lint-path:        { value: ${{ steps.config.outputs.lint_path }} }
+  directory:
+    description: "The directory of the app"
+    value: ${{ steps.config.outputs.directory }}
+
+  type:
+    description: "The type of the app"
+    value: ${{ steps.config.outputs.type }}
+
+  version:
+    description: "The version"
+    value: ${{ steps.config.outputs.version }}
+
+  install-command:
+    description: "Install command"
+    value: ${{ steps.config.outputs.install_command }}
+
+  test-command:
+    description: "Test command"
+    value: ${{ steps.config.outputs.test_command }}
+
+  build-command:
+    description: "Build command"
+    value: ${{ steps.config.outputs.build_command }}
+
+  lint:
+    description: "Whether linting is enabled"
+    value: ${{ steps.config.outputs.lint }}
+
+  lint-path:
+    description: "Optional linting subdirectory"
+    value: ${{ steps.config.outputs.lint_path }}
 
 runs:
   using: composite
@@ -38,23 +61,19 @@ runs:
           exit 1
         fi
 
-        # Search backend first, then frontend
         APP=$(jq -c \
           --arg id "$APP_ID" \
           '.apps.backend[$id] // .apps.frontend[$id] // null' \
-          "$CONFIG_PATH"
-        )
+          "$CONFIG_PATH")
 
         if [[ "$APP" == "null" ]]; then
           echo "❌ ERROR: App ID '$APP_ID' not found in backend or frontend"
           exit 1
         fi
 
-        # Safe extract function: return empty string if missing
         safe_get() {
-          echo "$APP" | jq -r --arg k "$1" '
-            if has($k) and .[$k] != null then .[$k] else "" end
-          '
+          echo "$APP" | jq -r --arg k "$1" \
+            'if has($k) and .[$k] != null then .[$k] else "" end'
         }
 
         DIR=$(safe_get "directory")
@@ -64,9 +83,12 @@ runs:
         TEST=$(safe_get "test-command")
         BUILD=$(safe_get "build-command")
         LINT=$(safe_get "lint")
-
-        # lint-path may be object, string, or null → raw JSON safe
         LINT_PATH=$(echo "$APP" | jq -c '."lint-path" // ""')
+
+        if [ -z "$DIR" ]; then
+          echo "❌ Missing 'directory' in config"
+          exit 1
+        fi
 
         echo "directory=$DIR"           >> $GITHUB_OUTPUT
         echo "type=$TYPE"               >> $GITHUB_OUTPUT
@@ -78,7 +100,7 @@ runs:
         echo "lint_path=$LINT_PATH"     >> $GITHUB_OUTPUT
 
     #################################################################
-    #                        LANGUAGE SETUP                         #
+    #                      LANGUAGE SETUP                           #
     #################################################################
     - name: Setup Node.js
       if: ${{ steps.config.outputs.type == 'node' }}
@@ -96,7 +118,7 @@ runs:
       if: ${{ steps.config.outputs.type == 'flutter' }}
       uses: subosito/flutter-action@v2
       with:
-        flutter-version: ${{ steps.config(outputs.version) }}
+        flutter-version: ${{ steps.config.outputs.version }}
 
     - name: Setup Java
       if: ${{ steps.config.outputs.type == 'java' }}
