@@ -9,6 +9,9 @@ on:
 jobs:
   deploy-frontend:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        app-id: ["source_2"]  # Add your frontend app ID here
     steps:
       - uses: actions/checkout@v4
       - name: Deploy Frontend
