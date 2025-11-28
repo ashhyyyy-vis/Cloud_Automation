@@ -38,27 +38,27 @@ runs:
         echo "BUILD_CMD='$BUILD_CMD'" >> $GITHUB_ENV
         echo "TEST_CMD='$TEST_CMD'" >> $GITHUB_ENV
 
-    - name: Setup Stack
-      shell: bash
-      run: |
-        case "$STACK" in
-          "node")
-            echo "Setting up Node.js"
-            curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-            sudo apt-get install -y nodejs
-            ;;
-          "python")
-            echo "Setting up Python"
-            sudo apt-get update && sudo apt-get install -y python3 python3-pip
-            ;;
-          "java")
-            echo "Setting up Java"
-            sudo apt-get update && sudo apt-get install -y openjdk-17-jdk
-            ;;
-          *)
-            echo "Using pre-installed stack: $STACK"
-            ;;
-        esac
+    - name: Setup Node.js
+      if: ${{ env.STACK == 'node' }}
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
+        cache: 'npm'
+
+    - name: Setup Python
+      if: ${{ env.STACK == 'python' }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.x'
+        cache: 'pip'
+
+    - name: Setup Java
+      if: ${{ env.STACK == 'java' || env.STACK == 'gradle' }}
+      uses: actions/setup-java@v3
+      with:
+        distribution: 'temurin'
+        java-version: '17'
+        cache: 'gradle'
 
     - name: Install Dependencies
       shell: bash
