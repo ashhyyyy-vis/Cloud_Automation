@@ -43,14 +43,14 @@ runs:
       uses: actions/setup-node@v3
       with:
         node-version: '18'
-        cache: 'npm'
+        #cache: 'npm'
 
     - name: Setup Python
       if: ${{ env.STACK == 'python' }}
       uses: actions/setup-python@v4
       with:
         python-version: '3.x'
-        cache: 'pip'
+        #cache: 'pip'
 
     - name: Setup Java
       if: ${{ env.STACK == 'java' || env.STACK == 'gradle' }}
@@ -58,7 +58,7 @@ runs:
       with:
         distribution: 'temurin'
         java-version: '17'
-        cache: 'gradle'
+        #cache: 'gradle'
 
     - name: Install Dependencies
       shell: bash
