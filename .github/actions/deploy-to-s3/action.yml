@@ -1,124 +1,73 @@
-name: "Deploy Module to AWS S3"
-description: "Deploys a frontend module using config.json + SSM parameters"
+name: 'Deploy to S3'
+description: 'Deploy build artifacts to S3'
 
 inputs:
   app-type:
+    description: 'Type of application'
     required: true
   app-id:
+    description: 'ID of the application'
     required: true
-
   config-path:
+    description: 'Path to config.json'
     required: true
-    default: ./config.json
-
   aws-access-key-id:
+    description: 'AWS access key ID'
     required: true
   aws-secret-access-key:
+    description: 'AWS secret access key'
     required: true
 
 runs:
-  using: composite
+  using: 'composite'
   steps:
-
-    ##################################################################
-    #                 INSTALL jq (JSON parser)                       #
-    ##################################################################
-    - name: Install jq
-      shell: bash
-      run: |
-        sudo apt-get update -y
-        sudo apt-get install -y jq
-
-    ##################################################################
-    #                READ MODULE CONFIG (from JSON)                  #
-    ##################################################################
-    - name: Read module config
-      id: cfg
-      shell: bash
-      run: |
-        CFG="${{ inputs.config-path }}"
-        APP_ID="${{ inputs.app-id }}"
-        APP_TYPE="${{ inputs.app-type }}"
-
-        APP=$(jq -c --arg t "$APP_TYPE" --arg id "$APP_ID" \
-          '.apps[$t][$id] // null' "$CFG")
-
-        if [[ "$APP" == "null" ]]; then
-          echo "❌ Module not found in config.json"
-          exit 1
-        fi
-
-        safe() {
-          echo "$APP" | jq -r --arg k "$1" 'if has($k) then .[$k] else "" end'
-        }
-
-        DIR=$(safe "directory")
-        BUILD_CMD=$(safe "build-command")
-        DEPLOY=$(safe "deploy")
-
-        echo "directory=$DIR"   >> $GITHUB_OUTPUT
-        echo "build=$BUILD_CMD" >> $GITHUB_OUTPUT
-        echo "deploy=$DEPLOY"   >> $GITHUB_OUTPUT
-
-    ##################################################################
-    #             READ AWS HOSTING CONFIG (FROM SSM)                 #
-    ##################################################################
-    - name: Fetch hosting config from SSM
-      id: aws
-      shell: bash
-      run: |
-        APP_ID="${{ inputs.app-id }}"
-        APP_TYPE="${{ inputs.app-type }}"
-
-        # SSM parameter paths
-        BUCKET_PARAM="/${APP_TYPE}/${APP_ID}/bucket"
-        REGION_PARAM="/${APP_TYPE}/${APP_ID}/region"
-
-        BUCKET=$(aws ssm get-parameter --name "$BUCKET_PARAM" --query "Parameter.Value" --output text 2>/dev/null || true)
-        REGION=$(aws ssm get-parameter --name "$REGION_PARAM" --query "Parameter.Value" --output text 2>/dev/null || true)
-
-        if [[ -z "$BUCKET" || -z "$REGION" ]]; then
-          echo "❌ Missing SSM params:"
-          echo "   $BUCKET_PARAM → '$BUCKET'"
-          echo "   $REGION_PARAM → '$REGION'"
-          exit 1
-        fi
-
-        echo "bucket=$BUCKET" >> $GITHUB_OUTPUT
-        echo "region=$REGION" >> $GITHUB_OUTPUT
-
-    ##################################################################
-    #                         BUILD FRONTEND                         #
-    ##################################################################
-    - name: Build frontend
-      if: ${{ steps.cfg.outputs.deploy == 'true' }}
-      shell: bash
-      working-directory: ${{ steps.cfg.outputs.directory }}
-      run: |
-        echo "🏗️ Building frontend..."
-        ${{ steps.cfg.outputs.build }}
-
-    ##################################################################
-    #                        AWS CREDENTIALS                         #
-    ##################################################################
     - name: Configure AWS
-      if: ${{ steps.cfg.outputs.deploy == 'true' }}
-      uses: aws-actions/configure-aws-credentials@v2
+      uses: aws-actions/configure-aws-credentials@v4
       with:
         aws-access-key-id: ${{ inputs.aws-access-key-id }}
         aws-secret-access-key: ${{ inputs.aws-secret-access-key }}
-        aws-region: ${{ steps.aws.outputs.region }}
+        aws-region: us-east-1  # Default region for SSM calls
 
-    ##################################################################
-    #                           DEPLOY                                #
-    ##################################################################
+    - name: Get S3 bucket from SSM
+      id: ssm
+      shell: bash
+      run: |
+        PREFIX="/${{ inputs.app-type }}/${{ inputs.app-id }}"
+        
+        # Get bucket name from SSM
+        BUCKET_PARAM="${PREFIX}/bucket"
+        BUCKET=$(aws ssm get-parameter \
+          --name "$BUCKET_PARAM" \
+          --query 'Parameter.Value' \
+          --output text 2>/dev/null || echo "")
+          
+        if [ -z "$BUCKET" ]; then
+          echo "::error::Could not find S3 bucket in SSM at $BUCKET_PARAM"
+          exit 1
+        fi
+        
+        # Get region from SSM or use default
+        REGION_PARAM="${PREFIX}/region"
+        REGION=$(aws ssm get-parameter \
+          --name "$REGION_PARAM" \
+          --query 'Parameter.Value' \
+          --output text 2>/dev/null || echo "us-east-1")
+          
+        echo "bucket=$BUCKET" >> $GITHUB_OUTPUT
+        echo "region=$REGION" >> $GITHUB_OUTPUT
+
+    - name: Download artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ inputs.app-type }}-${{ inputs.app-id }}
+        path: ./deploy
+
     - name: Deploy to S3
-      if: ${{ steps.cfg.outputs.deploy == 'true' }}
       shell: bash
       run: |
         aws s3 sync \
-          ${{ steps.cfg.outputs.directory }}/build \
-          s3://${{ steps.aws.outputs.bucket }} \
-          --delete
-
-        echo "✨ Deployment completed to S3 bucket: ${{ steps.aws.outputs.bucket }}"
+          ./deploy \
+          s3://${{ steps.config.outputs.bucket }} \
+          --delete \
+          --acl public-read \
+          --cache-control "public, max-age=31536000, immutable"

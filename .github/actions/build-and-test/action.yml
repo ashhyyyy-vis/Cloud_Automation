@@ -1,0 +1,83 @@
+name: 'Build and Test'
+description: 'Build and test application based on stack configuration'
+
+inputs:
+  app-type:
+    description: 'Type of application (frontend/backend)'
+    required: true
+  app-id:
+    description: 'ID of the application'
+    required: true
+  config-path:
+    description: 'Path to config.json'
+    required: true
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install jq
+      shell: bash
+      run: sudo apt-get install -y jq
+
+    - name: Load config
+      id: config
+      shell: bash
+      run: |
+        CFG=$(jq -c --arg type "${{ inputs.app-type }}" --arg id "${{ inputs.app-id }}" \
+          '.apps[$type][$id]' "${{ inputs.config-path }}")
+        
+        STACK=$(echo "$CFG" | jq -r '.stack')
+        DIR=$(echo "$CFG" | jq -r '.directory')
+        INSTALL_CMD=$(echo "$CFG" | jq -r '.install')
+        BUILD_CMD=$(echo "$CFG" | jq -r '.build')
+        TEST_CMD=$(echo "$CFG" | jq -r '.test // "echo No tests configured"')
+        
+        echo "STACK=$STACK" >> $GITHUB_ENV
+        echo "DIR=$DIR" >> $GITHUB_ENV
+        echo "INSTALL_CMD='$INSTALL_CMD'" >> $GITHUB_ENV
+        echo "BUILD_CMD='$BUILD_CMD'" >> $GITHUB_ENV
+        echo "TEST_CMD='$TEST_CMD'" >> $GITHUB_ENV
+
+    - name: Setup Stack
+      shell: bash
+      run: |
+        case "$STACK" in
+          "node")
+            echo "Setting up Node.js"
+            curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+            sudo apt-get install -y nodejs
+            ;;
+          "python")
+            echo "Setting up Python"
+            sudo apt-get update && sudo apt-get install -y python3 python3-pip
+            ;;
+          "java")
+            echo "Setting up Java"
+            sudo apt-get update && sudo apt-get install -y openjdk-17-jdk
+            ;;
+          *)
+            echo "Using pre-installed stack: $STACK"
+            ;;
+        esac
+
+    - name: Install Dependencies
+      shell: bash
+      working-directory: ${{ env.DIR }}
+      run: eval "$INSTALL_CMD"
+
+    - name: Run Tests
+      shell: bash
+      working-directory: ${{ env.DIR }}
+      run: eval "$TEST_CMD"
+
+    - name: Build
+      shell: bash
+      working-directory: ${{ env.DIR }}
+      run: eval "$BUILD_CMD"
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: frontend-${{ inputs.app-id }}
+        path: ${{ env.DIR }}/build
+        retention-days: 1

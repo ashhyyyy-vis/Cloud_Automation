@@ -1,7 +1,15 @@
-name: Deploy (Platform)
+name: Deploy (Platform - SSM)
 
 on:
   workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  SSM_PREFIX: /platform/backend
+  DEFAULT_AWS_REGION: ap-south-1
 
 jobs:
 
@@ -16,30 +24,45 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Configure AWS for SSM read
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-region: ${{ env.DEFAULT_AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          role-session-name: prepare-ssm
+
       - name: Install jq
         run: |
           sudo apt-get update -y
           sudo apt-get install -y jq
 
-      - name: Read backend from deployment-config.json
-        id: read
-        shell: bash
-        run: |
-          if [ ! -f deployment-config.json ]; then
-            echo "ERROR: deployment-config.json not found"
-            exit 1
-          fi
-
-          BACKEND=$(jq -c '.backend' deployment-config.json)
-
-          echo "backend=$BACKEND" >> $GITHUB_OUTPUT
-
-      - name: Extract backend app IDs
+      - name: List SSM modules
         id: ids
         shell: bash
         run: |
-          RAW="${{ steps.read.outputs.backend }}"
-          IDS=$(echo "$RAW" | jq -c 'keys')
+          set -euo pipefail
+          PREFIX="${{ env.SSM_PREFIX }}"
+
+          NAMES=$(aws ssm get-parameters-by-path \
+            --path "$PREFIX" \
+            --recursive \
+            --query 'Parameters[].Name' \
+            --output json)
+
+          if [ "$(echo "$NAMES" | jq 'length')" -eq 0 ]; then
+            echo "No modules under $PREFIX"
+            echo "ids=[]" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          IDS=$(
+            echo "$NAMES" | jq -r '.[]' \
+            | sed "s|^${PREFIX}/||" \
+            | awk -F'/' '{print $1}' \
+            | sort -u \
+            | jq -R -s -c 'split("\n")[:-1]'
+          )
+
           echo "ids=$IDS" >> $GITHUB_OUTPUT
 
 
@@ -48,6 +71,7 @@ jobs:
   ####################################################################
   deploy:
     needs: prepare
+    continue-on-error: true
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -57,143 +81,162 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Configure AWS for deployment
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-region: ${{ env.DEFAULT_AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          role-session-name: deploy-ssm
+
       - name: Install jq
         run: |
           sudo apt-get update -y
           sudo apt-get install -y jq
 
-      - name: Parse backend app config
+      - name: Read module config from SSM
         id: parse
         shell: bash
         run: |
-          KEY="${{ matrix.app-id }}"
+          set -euo pipefail
+          PREFIX="${{ env.SSM_PREFIX }}"
+          ID="${{ matrix.app-id }}"
 
-          BACKEND=$(jq -c '.backend' deployment-config.json)
+          KEYS=(image_repo asg_name region port health_path instance_warmup min_healthy_percent user_data_template ssm_param_name)
 
-          APP_JSON=$(echo "$BACKEND" | jq -c --arg k "$KEY" '.[$k]')
+          for k in "${KEYS[@]}"; do
+            P="${PREFIX}/${ID}/${k}"
+            V=$(aws ssm get-parameter --name "$P" --with-decryption --query 'Parameter.Value' --output text 2>/dev/null || echo "")
+            echo "${k}=$V" >> $GITHUB_OUTPUT
+          done
 
-          echo "=== Parsed App Config ==="
-          echo "$APP_JSON" | jq .
-          echo "========================="
-
-          echo "image_repo=$(echo "$APP_JSON" | jq -r '.image_repo')" >> $GITHUB_OUTPUT
-          echo "launch_template_id=$(echo "$APP_JSON" | jq -r '.launch_template_id')" >> $GITHUB_OUTPUT
-          echo "asg_name=$(echo "$APP_JSON" | jq -r '.asg_name')" >> $GITHUB_OUTPUT
-          echo "region=$(echo "$APP_JSON" | jq -r '.region')" >> $GITHUB_OUTPUT
-          echo "port=$(echo "$APP_JSON" | jq -r '.port')" >> $GITHUB_OUTPUT
-          echo "health_path=$(echo "$APP_JSON" | jq -r '.health_path')" >> $GITHUB_OUTPUT
-          echo "instance_warmup=$(echo "$APP_JSON" | jq -r '.instance_warmup')" >> $GITHUB_OUTPUT
-          echo "min_healthy_percent=$(echo "$APP_JSON" | jq -r '.min_healthy_percent')" >> $GITHUB_OUTPUT
-          echo "user_data_template=$(echo "$APP_JSON" | jq -r '.user_data_template')" >> $GITHUB_OUTPUT
-          echo "ssm_param_name=$(echo "$APP_JSON" | jq -r '.ssm_param_name')" >> $GITHUB_OUTPUT
-
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v2
-        with:
-          aws-region: ${{ steps.parse.outputs.region }}
-          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
-          role-session-name: gha-deploy
-
-      - name: Export deployment vars
-        id: vars
+      - name: Debug module config
         run: |
-          echo "image_tag=${{ github.sha }}" >> $GITHUB_OUTPUT
-          echo "image_repo=${{ steps.parse.outputs.image_repo }}" >> $GITHUB_OUTPUT
-          echo "lt_id=${{ steps.parse.outputs.launch_template_id }}" >> $GITHUB_OUTPUT
-          echo "asg_name=${{ steps.parse.outputs.asg_name }}" >> $GITHUB_OUTPUT
-          echo "ud_template=${{ steps.parse.outputs.user_data_template }}" >> $GITHUB_OUTPUT
-          echo "ssm_param=${{ steps.parse.outputs.ssm_param_name }}" >> $GITHUB_OUTPUT
-          echo "warmup=${{ steps.parse.outputs.instance_warmup }}" >> $GITHUB_OUTPUT
-          echo "minheal=${{ steps.parse.outputs.min_healthy_percent }}" >> $GITHUB_OUTPUT
+          echo "Module: ${{ matrix.app-id }}"
+          echo "image_repo: ${{ steps.parse.outputs.image_repo }}"
+          echo "asg_name: ${{ steps.parse.outputs.asg_name }}"
+          echo "region: ${{ steps.parse.outputs.region }}"
+          echo "ssm_param_name: ${{ steps.parse.outputs.ssm_param_name }}"
 
-      - name: Write image tag to SSM (SSM mode)
-        if: ${{ steps.vars.outputs.ud_template == 'ssm' }}
+      - name: Update SSM Param with new image
+        id: ssm_update
+        shell: bash
         run: |
-          aws ssm put-parameter \
-            --name "${{ steps.vars.outputs.ssm_param }}" \
-            --value "${{ steps.vars.outputs.image_repo }}:${{ steps.vars.outputs.image_tag }}" \
-            --type String \
-            --overwrite
+          IMAGE="${{ steps.parse.outputs.image_repo }}:${{ github.sha }}"
 
-      - name: Create new Launch Template version (UserData mode)
-        if: ${{ steps.vars.outputs.ud_template != 'ssm' }}
-        id: newlt
+          TARGET="${{ steps.parse.outputs.ssm_param_name }}"
+          if [ -z "$TARGET" ]; then
+            TARGET="${{ env.SSM_PREFIX }}/${{ matrix.app-id }}/image_uri"
+          fi
+
+          echo "Updating $TARGET -> $IMAGE"
+          aws ssm put-parameter --name "$TARGET" --value "$IMAGE" --type String --overwrite
+          echo "updated_param=$TARGET" >> $GITHUB_OUTPUT
+
+      - name: Safe ASG refresh
+        id: refresh
+        shell: bash
         run: |
-          IMAGE_REPO="${{ steps.vars.outputs.image_repo }}"
-          IMAGE_TAG="${{ steps.vars.outputs.image_tag }}"
-          PORT="${{ steps.parse.outputs.port }}"
-
-          echo "#!/bin/bash" > user-data.sh
-          echo "set -e" >> user-data.sh
-          echo "IMAGE_FULL=\"$IMAGE_REPO:$IMAGE_TAG\"" >> user-data.sh
-          echo "docker pull \$IMAGE_FULL || true" >> user-data.sh
-          echo "docker stop myapp || true" >> user-data.sh
-          echo "docker rm myapp || true" >> user-data.sh
-          echo "docker run -d --name myapp --restart always -p $PORT:$PORT \$IMAGE_FULL" >> user-data.sh
-
-          USERDATA_B64=$(base64 -w 0 user-data.sh)
-
-          NEW_VERSION=$(aws ec2 create-launch-template-version \
-            --launch-template-id "${{ steps.vars.outputs.lt_id }}" \
-            --launch-template-data "{\"UserData\":\"$USERDATA_B64\"}" \
-            --version-description "deploy-$IMAGE_TAG" \
-            --query 'LaunchTemplateVersion.VersionNumber' \
-            --output text)
-
-          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
-
-      - name: Update Auto Scaling Group (if LT updated)
-        run: |
-          if [ "${{ steps.vars.outputs.ud_template }}" = "ssm" ]; then
-            echo "SSM mode → skipping LT"
+          ASG="${{ steps.parse.outputs.asg_name }}"
+          if [ -z "$ASG" ]; then
+            echo "No ASG for module, skipping"
+            echo "refresh_id=" >> $GITHUB_OUTPUT
             exit 0
           fi
 
-          aws autoscaling update-auto-scaling-group \
-            --auto-scaling-group-name "${{ steps.vars.outputs.asg_name }}" \
-            --launch-template "LaunchTemplateId=${{ steps.vars.outputs.lt_id }},Version=${{ steps.newlt.outputs.new_version }}"
+          STATUS=$(aws autoscaling describe-instance-refreshes \
+            --auto-scaling-group-name "$ASG" \
+            --max-records 1 \
+            --query 'InstanceRefreshes[0].Status' --output text 2>/dev/null || echo "NONE")
 
-      - name: Start instance refresh
-        id: refresh
-        run: |
-          ASG="${{ steps.vars.outputs.asg_name }}"
+          if [ "$STATUS" = "InProgress" ]; then
+            echo "Refresh already running"
+            echo "refresh_id=" >> $GITHUB_OUTPUT
+            exit 0
+          fi
 
-          REFRESH_ID=$(aws autoscaling start-instance-refresh \
+          RID=$(aws autoscaling start-instance-refresh \
             --auto-scaling-group-name "$ASG" \
             --strategy Rolling \
-            --preferences "{\"MinHealthyPercentage\":${{ steps.vars.outputs.minheal }},\"InstanceWarmup\":${{ steps.vars.outputs.warmup }}}" \
-            --query 'InstanceRefreshId' \
-            --output text)
+            --query 'InstanceRefreshId' --output text)
 
-          echo "refresh_id=$REFRESH_ID" >> $GITHUB_OUTPUT
+          echo "refresh_id=$RID" >> $GITHUB_OUTPUT
 
-      - name: Wait for refresh to complete
+      - name: Get previous stable version
+        id: prev
+        if: steps.refresh.outputs.refresh_id != ''
+        shell: bash
         run: |
-          ASG="${{ steps.vars.outputs.asg_name }}"
+          PREFIX="${{ env.SSM_PREFIX }}"
+          ID="${{ matrix.app-id }}"
+
+          STABLE="${PREFIX}/${ID}/stable_image_uri"
+
+          PREV=$(aws ssm get-parameter \
+            --name "$STABLE" \
+            --query "Parameter.Value" \
+            --output text 2>/dev/null || echo "")
+
+          echo "PREV_IMAGE=$PREV" >> $GITHUB_ENV
+
+          CURRENT="${{ steps.parse.outputs.image_repo }}:${{ github.sha }}"
+          echo "CURRENT_IMAGE=$CURRENT" >> $GITHUB_ENV
+
+
+      - name: Wait for refresh
+        id: wait
+        if: steps.refresh.outputs.refresh_id != ''
+        timeout-minutes: 60
+        continue-on-error: true
+        shell: bash
+        run: |
+          ASG="${{ steps.parse.outputs.asg_name }}"
           REF="${{ steps.refresh.outputs.refresh_id }}"
 
-          while true; do
-            STATUS=$(aws autoscaling describe-instance-refreshes \
+          for i in {1..120}; do
+            S=$(aws autoscaling describe-instance-refreshes \
               --auto-scaling-group-name "$ASG" \
               --instance-refresh-ids "$REF" \
               --query 'InstanceRefreshes[0].Status' \
               --output text)
 
-            echo "Status: $STATUS"
+            echo "Status: $S"
 
-            if [[ "$STATUS" == "Successful" ]]; then
-              echo "Deployment successful."
-              break
+            if [ "$S" = "Successful" ]; then
+              # now mark this version stable
+              STABLE="${{ env.SSM_PREFIX }}/${{ matrix.app-id }}/stable_image_uri"
+              aws ssm put-parameter --name "$STABLE" --value "${{ env.CURRENT_IMAGE }}" --type String --overwrite
+              exit 0
             fi
 
-            if [[ "$STATUS" == "Failed" || "$STATUS" == "Cancelled" ]]; then
-              echo "Deployment failed."
+            if [[ "$S" =~ Failed|Cancelled|RollbackInProgress|RollbackFailed ]]; then
               exit 1
             fi
 
-            sleep 20
+            sleep 30
           done
 
-      - name: Smoke test
+          exit 1
+
+      - name: Rollback if needed
+        if: steps.wait.outcome == 'failure' && env.PREV_IMAGE != ''
+        shell: bash
         run: |
-          echo "Smoke test placeholder — integrate with ALB later."
+          PREFIX="${{ env.SSM_PREFIX }}"
+          ID="${{ matrix.app-id }}"
+
+          TARGET="${PREFIX}/${ID}/image_uri"
+
+          echo "Rollback to ${PREV_IMAGE}"
+          aws ssm put-parameter --name "$TARGET" --value "${PREV_IMAGE}" --type String --overwrite
+
+          ASG="${{ steps.parse.outputs.asg_name }}"
+          [ -z "$ASG" ] || aws autoscaling start-instance-refresh \
+            --auto-scaling-group-name "$ASG" \
+            --strategy Rolling
+
+          exit 1
+
+      - name: Smoke test
+        if: steps.wait.outcome == 'success'
+        run: |
+          echo "Smoke test placeholder — OK"
