@@ -1,18 +1,21 @@
 name: Deploy (Platform - SSM)
 
 on:
-  workflow_dispatch:
+  workflow_run:
+    workflows: ["Backend CI"]
+    types: [completed]
 
 permissions:
-  id-token: write
   contents: read
+  packages: read
+  statuses: write
+  id-token: write
 
 env:
-  SSM_PREFIX: /platform/backend
+  SSM_PREFIX: /hosting-template/compute/backend
   DEFAULT_AWS_REGION: ap-south-1
 
 jobs:
-
   ####################################################################
   #                            PREPARE                               #
   ####################################################################
@@ -64,7 +67,6 @@ jobs:
           )
 
           echo "ids=$IDS" >> $GITHUB_OUTPUT
-
 
   ####################################################################
   #                            DEPLOY                                #
@@ -180,7 +182,6 @@ jobs:
 
           CURRENT="${{ steps.parse.outputs.image_repo }}:${{ github.sha }}"
           echo "CURRENT_IMAGE=$CURRENT" >> $GITHUB_ENV
-
 
       - name: Wait for refresh
         id: wait
