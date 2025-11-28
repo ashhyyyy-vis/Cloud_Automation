@@ -26,11 +26,11 @@ runs:
         CFG=$(jq -c --arg type "${{ inputs.app-type }}" --arg id "${{ inputs.app-id }}" \
           '.apps[$type][$id]' "${{ inputs.config-path }}")
         
-        STACK=$(echo "$CFG" | jq -r '.stack')
+        STACK=$(echo "$CFG" | jq -r '.type')
         DIR=$(echo "$CFG" | jq -r '.directory')
-        INSTALL_CMD=$(echo "$CFG" | jq -r '.install')
-        BUILD_CMD=$(echo "$CFG" | jq -r '.build')
-        TEST_CMD=$(echo "$CFG" | jq -r '.test // "echo No tests configured"')
+        INSTALL_CMD=$(echo "$CFG" | jq -r '.["install-command"]')
+        BUILD_CMD=$(echo "$CFG" | jq -r '.["build-command"]')
+        TEST_CMD=$(echo "$CFG" | jq -r '.["test-command"] // "echo No tests configured"')
         
         echo "STACK=$STACK" >> $GITHUB_ENV
         echo "DIR=$DIR" >> $GITHUB_ENV
