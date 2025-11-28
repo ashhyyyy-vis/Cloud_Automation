@@ -1,5 +1,4 @@
-name: Stack-Agnostic CI
-#🏳️‍⚧️✅
+name: Backend CI
 
 on:
   push:
@@ -13,9 +12,6 @@ permissions:
   statuses: write
 
 jobs:
-  ######################################################################
-  #                       PREPARE MATRIX                              #
-  ######################################################################
   prepare-matrix:
     runs-on: ubuntu-latest
     outputs:
@@ -36,40 +32,18 @@ jobs:
             exit 1
           fi
 
-          # Read keys for backend & frontend
+          # Read only backend keys
           BACKEND=$(jq -c '.apps.backend | keys // []' config.json)
-          FRONTEND=$(jq -c '.apps.frontend | keys // []' config.json)
 
-          echo "Backend modules:  $BACKEND"
-          echo "Frontend modules: $FRONTEND"
+          echo "Backend modules: $BACKEND"
 
-          # Combine into single array
-          MATRIX=$(jq -c -n \
-            --argjson b "$BACKEND" \
-            --argjson f "$FRONTEND" \
-            '$b + $f | unique'
-          )
+          # Output backend modules as matrix
+          echo "matrix=$BACKEND" >> $GITHUB_OUTPUT
+          echo "types=$(jq -c -n --argjson b "$BACKEND" '$b | map({"id": ., "type": "backend"})')" >> $GITHUB_OUTPUT
 
-          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
-
-          # Also keep a parallel array showing type (backend/frontend)
-          TYPES=$(jq -c -n \
-            --argjson b "$BACKEND" \
-            --argjson f "$FRONTEND" \
-            '
-              ($b | map({"id": ., "type": "backend"})) +
-              ($f | map({"id": ., "type": "frontend"}))
-            '
-          )
-
-          echo "types=$TYPES" >> $GITHUB_OUTPUT
-
-
-  ######################################################################
-  #                      BUILD + TEST JOBS                            #
-  ######################################################################
   build-and-test:
     needs: prepare-matrix
+    if: ${{ needs.prepare-matrix.outputs.matrix != '[]' }}
     runs-on: ubuntu-latest
 
     strategy:
@@ -79,28 +53,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      ##################################################################
-      #     FETCH TYPE (backend/frontend) for CURRENT MATRIX ITEM      #
-      ##################################################################
-      - id: get-type
-        name: Identify app type
-        shell: bash
-        run: |
-          TYPES='${{ needs.prepare-matrix.outputs.app_types }}'
-          APP='${{ matrix.app-id }}'
-
-          TYPE=$(echo "$TYPES" | jq -r --arg id "$APP" '.[] | select(.id == $id) | .type')
-
-          if [ -z "$TYPE" ]; then
-            echo "❌ Could not determine type for $APP"
-            exit 1
-          fi
-
-          echo "type=$TYPE" >> $GITHUB_OUTPUT
-
-      ##################################################################
-      #                RUN SETUP (NODE/PYTHON/JAVA/etc)               #
-      ##################################################################
       - name: Setup build environment for ${{ matrix.app-id }}
         id: setup
         uses: ./.github/actions/setup
@@ -108,9 +60,6 @@ jobs:
           app-id: ${{ matrix.app-id }}
           config-path: ./config.json
 
-      ##################################################################
-      #                         LINT                                    #
-      ##################################################################
       - name: Prepare lint paths
         id: lintprep
         shell: bash
@@ -125,14 +74,12 @@ jobs:
 
           LINT_PATH_JSON='${{ steps.setup.outputs.lint_path }}'
 
-          # Case 1: null → lint entire directory
           if [ "$LINT_PATH_JSON" = "null" ]; then
             DIR="${{ steps.setup.outputs.directory }}"
             echo "LINT_TARGETS=(${DIR}/.*)" >> $GITHUB_ENV
             exit 0
           fi
 
-          # Case 2: string/object → convert to list
           TARGETS=$(echo "$LINT_PATH_JSON" | jq -r '
             if type=="string" then
               [.]
@@ -141,7 +88,6 @@ jobs:
             end | join(" ")
           ')
 
-          # Build Regex Pattern for Super-Linter
           REGEX_PARTS=()
           APP_DIR="${{ steps.setup.outputs.directory }}"
 
@@ -164,7 +110,7 @@ jobs:
 
           IFS="|"
           REGEX_STRING="(${REGEX_PARTS[*]})"
-          IFS=" " # Reset IFS
+          IFS=" "
 
           echo "LINT_TARGETS=$REGEX_STRING" >> $GITHUB_ENV
           echo "Computed LINT_TARGETS (Regex): $REGEX_STRING"
@@ -176,7 +122,6 @@ jobs:
           DEFAULT_BRANCH: "main"
           FILTER_REGEX_INCLUDE: ${{ env.LINT_TARGETS }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # 2. DISABLE ERRORS (Allows pipeline to continue even if linting fails)
           DISABLE_ERRORS: true
 
       - name: Configure AWS OIDC Credentials
@@ -189,21 +134,13 @@ jobs:
       - name: Login to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
 
-      ##################################################################
-      #                    BACKEND ONLY: DOCKER BUILD                   #
-      ##################################################################
       - name: Build Docker image
-        if: ${{ steps.get-type.outputs.type == 'backend' && github.event_name != 'pull_request' }}
         env:
           ECR: ${{ secrets.ECR_REPO }}
           APP_DIR: ${{ steps.setup.outputs.directory }}
           COMMIT_SHA: ${{ github.sha }}
         run: |
-          docker build -t "$ECR:latest" app/backend_api/
-          docker tag "$ECR:latest" "$ECR:$COMMIT_SHA"
-
-      - name: Push Image
-        run: |
-          ECR="${{ secrets.ECR_REPO }}"
-          docker push "$ECR:latest"
-          docker push "$ECR:$COMMIT_SHA"
+          docker build -t "$ECR:latest" "$APP_DIR"
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            docker push "$ECR:latest"
+          fi
