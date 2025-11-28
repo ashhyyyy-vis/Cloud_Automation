@@ -63,7 +63,12 @@ runs:
     - name: Install Dependencies
       shell: bash
       working-directory: ${{ env.DIR }}
-      run: eval "$INSTALL_CMD"
+      run: |
+        # Debug info
+        echo "Running in directory: $(pwd)"
+        echo "Install command: ${{ env.INSTALL_CMD }}"
+        # Execute the stack-specific install command
+        ${{ env.INSTALL_CMD }}
 
     - name: Run Tests
       shell: bash
